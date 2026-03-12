@@ -313,7 +313,26 @@ function PrimaryButton({ children, onClick, type = "button", disabled = false })
   );
 }
 
-function SecondaryButton({ children, onClick }) {
+function SecondaryButton({ children, onClick, tone = "default" }) {
+  const toneStyles =
+    tone === "danger"
+      ? {
+          border: "1px solid rgba(220,38,38,0.18)",
+          color: "#991b1b",
+          background: "#fff",
+        }
+      : tone === "success"
+      ? {
+          border: "1px solid rgba(22,101,52,0.16)",
+          color: "#166534",
+          background: "#fff",
+        }
+      : {
+          border: `1px solid ${BRAND.border}`,
+          color: BRAND.text,
+          background: BRAND.surface,
+        };
+
   return (
     <button
       onClick={onClick}
@@ -321,10 +340,8 @@ function SecondaryButton({ children, onClick }) {
         padding: "11px 14px",
         borderRadius: 14,
         cursor: "pointer",
-        border: `1px solid ${BRAND.border}`,
-        background: BRAND.surface,
-        color: BRAND.text,
         fontWeight: 800,
+        ...toneStyles,
       }}
     >
       {children}
@@ -474,6 +491,7 @@ export default function DoctorApp() {
   const [loadingPatientStats, setLoadingPatientStats] = useState(false);
 
   const [activeTab, setActiveTab] = useState("medica");
+  const [patientFilter, setPatientFilter] = useState("active");
 
   const [dx, setDx] = useState("");
   const [antecedentes, setAntecedentes] = useState("");
@@ -534,9 +552,14 @@ export default function DoctorApp() {
 
   const canCreate = useMemo(() => name.trim().length >= 2, [name]);
 
+  const filteredPatients = useMemo(() => {
+    if (patientFilter === "all") return patients;
+    return patients.filter((p) => (p.status || "active") === patientFilter);
+  }, [patients, patientFilter]);
+
   const selectedPatient = useMemo(
-    () => patients.find((p) => p.id === selectedId) || null,
-    [patients, selectedId]
+    () => filteredPatients.find((p) => p.id === selectedId) || patients.find((p) => p.id === selectedId) || null,
+    [filteredPatients, patients, selectedId]
   );
 
   const selectedPatientStats = useMemo(() => {
@@ -593,8 +616,9 @@ export default function DoctorApp() {
   }, [lastMeasurement, initialMeasurement]);
 
   const dashboardStats = useMemo(() => {
-    const values = Object.values(patientStatsMap);
-    const total = patients.length;
+    const visiblePatients = filteredPatients;
+    const values = visiblePatients.map((p) => patientStatsMap[p.id]).filter(Boolean);
+    const total = visiblePatients.length;
     const withAlert = values.filter((s) => s?.risk?.tone === "danger").length;
     const stable = values.filter((s) => s?.risk?.tone === "success").length;
     const avg = values.length
@@ -607,10 +631,10 @@ export default function DoctorApp() {
       stable,
       avg,
     };
-  }, [patientStatsMap, patients]);
+  }, [patientStatsMap, filteredPatients]);
 
   const patientsSortedForTriage = useMemo(() => {
-    const list = [...patients];
+    const list = [...filteredPatients];
 
     list.sort((a, b) => {
       const sa = patientStatsMap[a.id];
@@ -630,7 +654,7 @@ export default function DoctorApp() {
     });
 
     return list;
-  }, [patients, patientStatsMap]);
+  }, [filteredPatients, patientStatsMap]);
 
   const showHomeSection = !isMobile || mobileSection === "home";
   const showPatientsSection = !isMobile || mobileSection === "patients";
@@ -646,15 +670,10 @@ export default function DoctorApp() {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  useEffect(() => {
-    if (!isMobile) return;
-    if (mobileSection === "patients" && selectedId) return;
-  }, [isMobile, mobileSection, selectedId]);
-
   const loadPatients = async (docId) => {
     const { data, error } = await supabase
       .from("patient_profiles")
-      .select("id, full_name, sex, height_cm, patient_user_id, intake, created_at")
+      .select("id, full_name, sex, height_cm, patient_user_id, intake, created_at, status")
       .eq("doctor_user_id", docId)
       .order("created_at", { ascending: false });
 
@@ -880,6 +899,17 @@ export default function DoctorApp() {
   }, [patients]);
 
   useEffect(() => {
+    if (!filteredPatients.length) {
+      setSelectedId(null);
+      return;
+    }
+
+    if (!filteredPatients.some((p) => p.id === selectedId)) {
+      setSelectedId(filteredPatients[0].id);
+    }
+  }, [filteredPatients, selectedId]);
+
+  useEffect(() => {
     setErr("");
     setMsg("");
 
@@ -947,8 +977,9 @@ export default function DoctorApp() {
         sex,
         height_cm: height ? Number(height) : null,
         intake: { medica: {}, nutri: {}, antropometria: {} },
+        status: "active",
       })
-      .select("id, full_name")
+      .select("id, full_name, status")
       .single();
 
     if (e1) return setErr(e1.message);
@@ -967,11 +998,39 @@ export default function DoctorApp() {
     setName("");
     setHeight("");
     await loadPatients(doctorId);
+    setPatientFilter("active");
     setSelectedId(created.id);
+  };
 
-    if (isMobile) {
-      setMobileSection("patients");
-    }
+  const updatePatientStatus = async (patientId, nextStatus) => {
+    setErr("");
+    setMsg("");
+
+    if (!patientId) return;
+
+    const currentPatient = patients.find((p) => p.id === patientId);
+    if (!currentPatient) return;
+
+    const actionLabel = nextStatus === "inactive" ? "pasar a inactivo" : "reactivar";
+    const ok = window.confirm(`¿Seguro que quieres ${actionLabel} a ${currentPatient.full_name}?`);
+    if (!ok) return;
+
+    const { error } = await supabase
+      .from("patient_profiles")
+      .update({ status: nextStatus })
+      .eq("id", patientId);
+
+    if (error) return setErr(error.message);
+
+    setPatients((prev) =>
+      prev.map((p) => (p.id === patientId ? { ...p, status: nextStatus } : p))
+    );
+
+    setMsg(
+      nextStatus === "inactive"
+        ? "✅ Paciente movido a inactivos."
+        : "✅ Paciente reactivado."
+    );
   };
 
   const guardarHistoriaClinica = async () => {
@@ -1063,10 +1122,6 @@ export default function DoctorApp() {
     setMNotes("");
     await loadProgress(selectedId);
     await loadPatientStats(patients);
-
-    if (isMobile) {
-      setMobileSection("tracking");
-    }
   };
 
   const deleteMeasurement = async (rowId) => {
@@ -1146,10 +1201,6 @@ export default function DoctorApp() {
     await loadPatientStats(patients);
 
     setMsg(`✅ Plan publicado para ${selectedPatient?.full_name || "paciente"} (semana ${safeWeekStart}).`);
-
-    if (isMobile) {
-      setMobileSection("plans");
-    }
   };
 
   const resetPlanV2 = () => setPlanV2(emptyPlanV2());
@@ -1195,7 +1246,7 @@ export default function DoctorApp() {
                 fontSize: 13,
               }}
             >
-              Pacientes: {patients.length}
+              Pacientes visibles: {filteredPatients.length}
             </div>
 
             <button
@@ -1248,22 +1299,34 @@ export default function DoctorApp() {
         </div>
       ) : null}
 
+      <div style={{ marginTop: 18, display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <TabButton active={patientFilter === "active"} onClick={() => setPatientFilter("active")}>
+          Activos
+        </TabButton>
+        <TabButton active={patientFilter === "inactive"} onClick={() => setPatientFilter("inactive")}>
+          Inactivos
+        </TabButton>
+        <TabButton active={patientFilter === "all"} onClick={() => setPatientFilter("all")}>
+          Todos
+        </TabButton>
+      </div>
+
       {showHomeSection ? (
         <div style={{ marginTop: 18, ...responsiveGrid(220) }}>
           <StatCard
-            label="Pacientes totales"
+            label="Pacientes visibles"
             value={dashboardStats.total}
-            hint={loadingPatientStats ? "Actualizando..." : "Base actual"}
+            hint={loadingPatientStats ? "Actualizando..." : "Según filtro actual"}
           />
           <StatCard
             label="Con alerta"
             value={dashboardStats.withAlert}
-            hint="Sin registros o alto riesgo"
+            hint="Riesgo alto"
           />
           <StatCard
             label="Seguimiento estable"
             value={dashboardStats.stable}
-            hint="Bajo riesgo actual"
+            hint="Riesgo bajo"
           />
           <StatCard
             label="Promedio global"
@@ -1323,7 +1386,13 @@ export default function DoctorApp() {
 
             <Card
               title="Triage de pacientes"
-              subtitle="Se ordenan por riesgo primero"
+              subtitle={
+                patientFilter === "all"
+                  ? "Todos los pacientes"
+                  : patientFilter === "inactive"
+                  ? "Pacientes inactivos"
+                  : "Pacientes activos"
+              }
               action={
                 <SecondaryButton onClick={() => loadPatientStats(patients)}>
                   Recargar
@@ -1336,6 +1405,7 @@ export default function DoctorApp() {
                   const stats = patientStatsMap[p.id];
                   const status = stats?.adherenceState || { label: "Sin datos", tone: "neutral" };
                   const risk = stats?.risk || { label: "Sin evaluar", tone: "neutral" };
+                  const patientStatus = p.status || "active";
 
                   return (
                     <button
@@ -1388,6 +1458,9 @@ export default function DoctorApp() {
                               {p.patient_user_id ? "Vinculado" : "Pendiente"}
                             </SmallBadge>
                             <SmallBadge tone={risk.tone}>{risk.label}</SmallBadge>
+                            <SmallBadge tone={patientStatus === "active" ? "success" : "warning"}>
+                              {patientStatus === "active" ? "Activo" : "Inactivo"}
+                            </SmallBadge>
                           </div>
 
                           <div style={{ marginTop: 10, display: "grid", gap: 4 }}>
@@ -1404,6 +1477,30 @@ export default function DoctorApp() {
                               Última medición: <b style={{ color: BRAND.text }}>{stats?.latestMeasurementDate || "-"}</b>
                             </div>
                           </div>
+
+                          <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                            {patientStatus === "active" ? (
+                              <SecondaryButton
+                                tone="danger"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  updatePatientStatus(p.id, "inactive");
+                                }}
+                              >
+                                Pasar a inactivo
+                              </SecondaryButton>
+                            ) : (
+                              <SecondaryButton
+                                tone="success"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  updatePatientStatus(p.id, "active");
+                                }}
+                              >
+                                Reactivar
+                              </SecondaryButton>
+                            )}
+                          </div>
                         </div>
 
                         <div style={{ display: "grid", gap: 8, justifyItems: "end" }}>
@@ -1414,9 +1511,9 @@ export default function DoctorApp() {
                   );
                 })}
 
-                {patients.length === 0 ? (
+                {filteredPatients.length === 0 ? (
                   <div style={{ color: BRAND.muted, fontSize: 14 }}>
-                    Aún no has creado pacientes.
+                    No hay pacientes en este filtro.
                   </div>
                 ) : null}
               </div>
@@ -1442,6 +1539,10 @@ export default function DoctorApp() {
                         <DataField
                           label="Altura"
                           value={selectedPatient.height_cm ? `${selectedPatient.height_cm} cm` : "-"}
+                        />
+                        <DataField
+                          label="Estado"
+                          value={(selectedPatient.status || "active") === "active" ? "Activo" : "Inactivo"}
                         />
                         <div
                           style={{
@@ -1483,6 +1584,18 @@ export default function DoctorApp() {
                           value={summaryWaistChange}
                           hint="Desde primera medición"
                         />
+                      </div>
+
+                      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                        {(selectedPatient.status || "active") === "active" ? (
+                          <SecondaryButton tone="danger" onClick={() => updatePatientStatus(selectedPatient.id, "inactive")}>
+                            Pasar a inactivo
+                          </SecondaryButton>
+                        ) : (
+                          <SecondaryButton tone="success" onClick={() => updatePatientStatus(selectedPatient.id, "active")}>
+                            Reactivar paciente
+                          </SecondaryButton>
+                        )}
                       </div>
 
                       {lastMeasurement ? (

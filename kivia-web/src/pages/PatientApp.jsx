@@ -829,67 +829,49 @@ export default function PatientApp() {
     nav("/login", { replace: true });
   };
 
-  const vincular = async () => {
-    setErr("");
-    setMsg("");
+const vincular = async () => {
+  setErr("");
+  setMsg("");
 
-    const clean = code.trim().toUpperCase();
+  const clean = code.trim().toUpperCase();
 
-    if (!clean.startsWith("KIV-") || clean.length < 8) {
-      return setErr("Código inválido. Debe ser como KIV-ABC123.");
-    }
+  if (!clean.startsWith("KIV-") || clean.length < 8) {
+    return setErr("Código inválido. Debe ser como KIV-ABC123.");
+  }
 
-    if (!userId) return setErr("No hay sesión.");
+  if (!userId) return setErr("No hay sesión.");
 
-    const { data: invite, error: e1 } = await supabase
-      .from("patient_invites")
-      .select("code, patient_profile_id, used_at")
-      .eq("code", clean)
-      .maybeSingle();
+  const { data: updatedProfile, error } = await supabase.rpc("claim_patient_invite", {
+    invite_code: clean,
+  });
 
-    if (e1) return setErr(e1.message);
-    if (!invite) return setErr("Ese código no existe.");
-    if (invite.used_at) return setErr("Ese código ya fue usado.");
+  if (error) {
+    const message = error.message || "";
+    if (message.includes("Código no existe")) return setErr("Ese código no existe.");
+    if (message.includes("ya fue usado")) return setErr("Ese código ya fue usado.");
+    if (message.includes("ya está vinculado")) return setErr("Ese perfil ya está vinculado.");
+    return setErr(message);
+  }
 
-    const { data: updatedProfile, error: e2 } = await supabase
-      .from("patient_profiles")
-      .update({ patient_user_id: userId })
-      .eq("id", invite.patient_profile_id)
-      .is("patient_user_id", null)
-      .select("id, full_name, sex, height_cm, doctor_user_id, patient_user_id")
-      .maybeSingle();
+  if (!updatedProfile?.id) {
+    return setErr("No se pudo vincular la cuenta.");
+  }
 
-    if (e2) return setErr(e2.message);
-    if (!updatedProfile?.id) return setErr("No se pudo vincular (código tomado o permisos).");
+  setProfile(updatedProfile);
+  await loadProgress(updatedProfile.id);
+  await loadAdherenceForDate(updatedProfile.id, todayISO());
+  await loadWeekAdherence(updatedProfile.id);
 
-    const { data: usedInvite, error: e3 } = await supabase
-      .from("patient_invites")
-      .update({ used_at: new Date().toISOString(), used_by: userId })
-      .eq("code", clean)
-      .is("used_at", null)
-      .select("code, used_at, used_by")
-      .maybeSingle();
+  const w = await loadWeeks(updatedProfile.id);
+  setWeeks(w);
+  await syncPlanForDate(updatedProfile.id, todayISO(), w);
 
-    if (e3) return setErr(e3.message);
-    if (!usedInvite?.used_at) {
-      return setErr("Se vinculó, pero no se pudo marcar el código como usado (permisos).");
-    }
+  setMsg("✅ Listo. Tu cuenta ya está vinculada.");
 
-    setProfile(updatedProfile);
-    await loadProgress(updatedProfile.id);
-    await loadAdherenceForDate(updatedProfile.id, todayISO());
-    await loadWeekAdherence(updatedProfile.id);
-
-    const w = await loadWeeks(updatedProfile.id);
-    setWeeks(w);
-    await syncPlanForDate(updatedProfile.id, todayISO(), w);
-
-    setMsg("✅ Listo. Tu cuenta ya está vinculada.");
-
-    if (isMobile) {
-      setMobileSection("today");
-    }
-  };
+  if (isMobile) {
+    setMobileSection("today");
+  }
+};
 
   const onPickWeek = async (weekStart) => {
     setErr("");
