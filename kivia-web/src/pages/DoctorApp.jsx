@@ -568,7 +568,10 @@ export default function DoctorApp() {
   }, [patients, patientFilter]);
 
   const selectedPatient = useMemo(
-    () => filteredPatients.find((p) => p.id === selectedId) || patients.find((p) => p.id === selectedId) || null,
+    () =>
+      filteredPatients.find((p) => p.id === selectedId) ||
+      patients.find((p) => p.id === selectedId) ||
+      null,
     [filteredPatients, patients, selectedId]
   );
 
@@ -635,12 +638,7 @@ export default function DoctorApp() {
       ? Math.round(values.reduce((acc, item) => acc + (item.weeklyAverage || 0), 0) / values.length)
       : 0;
 
-    return {
-      total,
-      withAlert,
-      stable,
-      avg,
-    };
+    return { total, withAlert, stable, avg };
   }, [patientStatsMap, filteredPatients]);
 
   const patientsSortedForTriage = useMemo(() => {
@@ -710,9 +708,8 @@ export default function DoctorApp() {
 
     const { data, error } = await supabase
       .from("patient_invites")
-      .select("id, patient_profile_id, code, used_at, used_by, doctor_user_id")
-      .in("patient_profile_id", patientIds)
-      .order("id", { ascending: false });
+      .select("patient_profile_id, code, used_at, used_by, doctor_user_id")
+      .in("patient_profile_id", patientIds);
 
     if (error) {
       setErr(error.message);
@@ -722,6 +719,7 @@ export default function DoctorApp() {
     const nextMap = {};
 
     for (const row of data || []) {
+      if (!row.patient_profile_id) continue;
       if (!nextMap[row.patient_profile_id]) {
         nextMap[row.patient_profile_id] = row;
       }
@@ -1023,6 +1021,23 @@ export default function DoctorApp() {
     nav("/login", { replace: true });
   };
 
+  const copyPatientCode = async () => {
+    const code = inviteMap[selectedPatient?.id]?.code;
+
+    if (!code) {
+      setErr("Este paciente no tiene código disponible.");
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(code);
+      setMsg(`✅ Código copiado: ${code}`);
+      setErr("");
+    } catch {
+      setErr("No se pudo copiar el código.");
+    }
+  };
+
   const crearPacienteYCodigo = async () => {
     setErr("");
     setMsg("");
@@ -1058,6 +1073,7 @@ export default function DoctorApp() {
     setMsg(`Paciente creado: ${created.full_name}. Código: ${code}`);
     setName("");
     setHeight("");
+
     await loadPatients(doctorId);
     setPatientFilter("active");
     setSelectedId(created.id);
@@ -1419,21 +1435,9 @@ export default function DoctorApp() {
             value={dashboardStats.total}
             hint={loadingPatientStats ? "Actualizando..." : "Según filtro actual"}
           />
-          <StatCard
-            label="Con alerta"
-            value={dashboardStats.withAlert}
-            hint="Riesgo alto"
-          />
-          <StatCard
-            label="Seguimiento estable"
-            value={dashboardStats.stable}
-            hint="Riesgo bajo"
-          />
-          <StatCard
-            label="Promedio global"
-            value={`${dashboardStats.avg}%`}
-            hint="Adherencia 7 días"
-          />
+          <StatCard label="Con alerta" value={dashboardStats.withAlert} hint="Riesgo alto" />
+          <StatCard label="Seguimiento estable" value={dashboardStats.stable} hint="Riesgo bajo" />
+          <StatCard label="Promedio global" value={`${dashboardStats.avg}%`} hint="Adherencia 7 días" />
         </div>
       ) : null}
 
@@ -1494,11 +1498,7 @@ export default function DoctorApp() {
                   ? "Pacientes inactivos"
                   : "Pacientes activos"
               }
-              action={
-                <SecondaryButton onClick={() => loadPatientStats(patients)}>
-                  Recargar
-                </SecondaryButton>
-              }
+              action={<SecondaryButton onClick={() => loadPatientStats(patients)}>Recargar</SecondaryButton>}
             >
               <div style={{ display: "grid", gap: 10, maxHeight: 680, overflowY: "auto" }}>
                 {patientsSortedForTriage.map((p) => {
@@ -1551,6 +1551,7 @@ export default function DoctorApp() {
                           >
                             {p.full_name}
                           </div>
+
                           <div style={{ marginTop: 6, color: BRAND.muted, fontSize: 12 }}>
                             {p.sex || "-"} • {p.height_cm ? `${p.height_cm} cm` : "altura -"}
                           </div>
@@ -1632,7 +1633,7 @@ export default function DoctorApp() {
           </div>
         ) : null}
 
-        {(showHomeSection || showTrackingSection || showPlansSection) ? (
+        {showHomeSection || showTrackingSection || showPlansSection ? (
           <div style={{ display: "grid", gap: 18, minWidth: 0 }}>
             {showHomeSection ? (
               <>
@@ -1688,6 +1689,20 @@ export default function DoctorApp() {
                         </div>
                       </div>
 
+                      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                        <PrimaryButton onClick={copyPatientCode}>Copiar código</PrimaryButton>
+
+                        {(selectedPatient.status || "active") === "active" ? (
+                          <SecondaryButton tone="danger" onClick={() => updatePatientStatus(selectedPatient.id, "inactive")}>
+                            Pasar a inactivo
+                          </SecondaryButton>
+                        ) : (
+                          <SecondaryButton tone="success" onClick={() => updatePatientStatus(selectedPatient.id, "active")}>
+                            Reactivar paciente
+                          </SecondaryButton>
+                        )}
+                      </div>
+
                       <div style={responsiveGrid(180)}>
                         <StatCard
                           label="Adherencia 7 días"
@@ -1709,18 +1724,6 @@ export default function DoctorApp() {
                           value={summaryWaistChange}
                           hint="Desde primera medición"
                         />
-                      </div>
-
-                      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                        {(selectedPatient.status || "active") === "active" ? (
-                          <SecondaryButton tone="danger" onClick={() => updatePatientStatus(selectedPatient.id, "inactive")}>
-                            Pasar a inactivo
-                          </SecondaryButton>
-                        ) : (
-                          <SecondaryButton tone="success" onClick={() => updatePatientStatus(selectedPatient.id, "active")}>
-                            Reactivar paciente
-                          </SecondaryButton>
-                        )}
                       </div>
 
                       {lastMeasurement ? (
@@ -2340,9 +2343,7 @@ export default function DoctorApp() {
 
                 {planMode === "v2" ? (
                   <div>
-                    <SectionTitle
-                      right={<SecondaryButton onClick={resetPlanV2}>Limpiar plan</SecondaryButton>}
-                    >
+                    <SectionTitle right={<SecondaryButton onClick={resetPlanV2}>Limpiar plan</SecondaryButton>}>
                       Plan organizado por días y comidas
                     </SectionTitle>
 
