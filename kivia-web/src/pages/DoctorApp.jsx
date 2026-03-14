@@ -411,6 +411,7 @@ function DataField({ label, value }) {
           color: BRAND.text,
           fontWeight: 800,
           wordBreak: "break-word",
+          whiteSpace: "pre-wrap",
         }}
       >
         {value || "-"}
@@ -488,6 +489,7 @@ export default function DoctorApp() {
   const [selectedId, setSelectedId] = useState(null);
 
   const [patientStatsMap, setPatientStatsMap] = useState({});
+  const [inviteMap, setInviteMap] = useState({});
   const [loadingPatientStats, setLoadingPatientStats] = useState(false);
 
   const [activeTab, setActiveTab] = useState("medica");
@@ -544,6 +546,14 @@ export default function DoctorApp() {
   const [todayAdherence, setTodayAdherence] = useState(null);
   const [weekAdherence, setWeekAdherence] = useState([]);
   const [lastAdherenceLog, setLastAdherenceLog] = useState(null);
+
+  const [prescriptions, setPrescriptions] = useState([]);
+  const [rxTitle, setRxTitle] = useState("");
+  const [rxDiagnosis, setRxDiagnosis] = useState("");
+  const [rxPrescriptionText, setRxPrescriptionText] = useState("");
+  const [rxInstructionsText, setRxInstructionsText] = useState("");
+  const [rxNotes, setRxNotes] = useState("");
+  const [savingPrescription, setSavingPrescription] = useState(false);
 
   const [isMobile, setIsMobile] = useState(
     typeof window !== "undefined" ? window.innerWidth <= 768 : false
@@ -688,6 +698,36 @@ export default function DoctorApp() {
     if (!selectedId && list?.[0]?.id) {
       setSelectedId(list[0].id);
     }
+  };
+
+  const loadInviteCodes = async (patientList) => {
+    if (!patientList?.length) {
+      setInviteMap({});
+      return;
+    }
+
+    const patientIds = patientList.map((p) => p.id);
+
+    const { data, error } = await supabase
+      .from("patient_invites")
+      .select("id, patient_profile_id, code, used_at, used_by, doctor_user_id")
+      .in("patient_profile_id", patientIds)
+      .order("id", { ascending: false });
+
+    if (error) {
+      setErr(error.message);
+      return;
+    }
+
+    const nextMap = {};
+
+    for (const row of data || []) {
+      if (!nextMap[row.patient_profile_id]) {
+        nextMap[row.patient_profile_id] = row;
+      }
+    }
+
+    setInviteMap(nextMap);
   };
 
   const loadPatientStats = async (patientList) => {
@@ -861,6 +901,23 @@ export default function DoctorApp() {
     setPlanText(defaultPlanText());
   };
 
+  const loadPrescriptions = async (profileId) => {
+    if (!profileId) return;
+
+    const { data, error } = await supabase
+      .from("prescriptions")
+      .select("*")
+      .eq("patient_profile_id", profileId)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      setErr(error.message);
+      return;
+    }
+
+    setPrescriptions(data || []);
+  };
+
   useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getSession();
@@ -892,10 +949,12 @@ export default function DoctorApp() {
   useEffect(() => {
     if (!patients.length) {
       setPatientStatsMap({});
+      setInviteMap({});
       return;
     }
 
     loadPatientStats(patients);
+    loadInviteCodes(patients);
   }, [patients]);
 
   useEffect(() => {
@@ -917,6 +976,7 @@ export default function DoctorApp() {
       setPlanMode("v2");
       setPlanV2(emptyPlanV2());
       setPlanText(defaultPlanText());
+      setPrescriptions([]);
       return;
     }
 
@@ -954,6 +1014,7 @@ export default function DoctorApp() {
       loadProgress(selectedPatient.id);
       loadAdherence(selectedPatient.id);
       loadWeeklyPlan(selectedPatient.id, weekStart);
+      loadPrescriptions(selectedPatient.id);
     }
   }, [selectedPatient, weekStart]);
 
@@ -1203,6 +1264,46 @@ export default function DoctorApp() {
     setMsg(`✅ Plan publicado para ${selectedPatient?.full_name || "paciente"} (semana ${safeWeekStart}).`);
   };
 
+  const savePrescription = async () => {
+    setErr("");
+    setMsg("");
+
+    if (!selectedPatient?.id) return setErr("Selecciona un paciente.");
+    if (!doctorId) return setErr("No hay sesión de doctor.");
+
+    if (!rxDiagnosis.trim() && !rxPrescriptionText.trim() && !rxInstructionsText.trim()) {
+      return setErr("Completa al menos diagnóstico, prescripción o indicaciones.");
+    }
+
+    setSavingPrescription(true);
+
+    const payload = {
+      patient_profile_id: selectedPatient.id,
+      doctor_user_id: doctorId,
+      title: rxTitle.trim() || null,
+      diagnosis: rxDiagnosis.trim() || null,
+      prescription_text: rxPrescriptionText.trim() || null,
+      instructions_text: rxInstructionsText.trim() || null,
+      notes: rxNotes.trim() || null,
+      status: "active",
+    };
+
+    const { error } = await supabase.from("prescriptions").insert(payload);
+
+    setSavingPrescription(false);
+
+    if (error) return setErr(error.message);
+
+    setRxTitle("");
+    setRxDiagnosis("");
+    setRxPrescriptionText("");
+    setRxInstructionsText("");
+    setRxNotes("");
+
+    setMsg("✅ Prescripción guardada.");
+    await loadPrescriptions(selectedPatient.id);
+  };
+
   const resetPlanV2 = () => setPlanV2(emptyPlanV2());
 
   return (
@@ -1230,7 +1331,7 @@ export default function DoctorApp() {
               KiviA Doctor
             </div>
             <div style={{ marginTop: 6, fontSize: 14, opacity: 0.9 }}>
-              Gestión clínica, progreso, adherencia y alertas en un solo panel.
+              Gestión clínica, progreso, adherencia, planes y prescripciones.
             </div>
             <div style={{ marginTop: 10, fontSize: 13, opacity: 0.85, wordBreak: "break-word" }}>{email}</div>
           </div>
@@ -1406,6 +1507,7 @@ export default function DoctorApp() {
                   const status = stats?.adherenceState || { label: "Sin datos", tone: "neutral" };
                   const risk = stats?.risk || { label: "Sin evaluar", tone: "neutral" };
                   const patientStatus = p.status || "active";
+                  const invite = inviteMap[p.id];
 
                   return (
                     <button
@@ -1476,6 +1578,15 @@ export default function DoctorApp() {
                             <div style={{ fontSize: 12, color: BRAND.muted }}>
                               Última medición: <b style={{ color: BRAND.text }}>{stats?.latestMeasurementDate || "-"}</b>
                             </div>
+                            <div style={{ fontSize: 12, color: BRAND.muted }}>
+                              Código: <b style={{ color: BRAND.text }}>{invite?.code || "-"}</b>
+                            </div>
+                            <div style={{ fontSize: 12, color: BRAND.muted }}>
+                              Estado código:{" "}
+                              <b style={{ color: BRAND.text }}>
+                                {invite?.used_at ? "Usado" : invite?.code ? "Pendiente" : "-"}
+                              </b>
+                            </div>
                           </div>
 
                           <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -1543,6 +1654,20 @@ export default function DoctorApp() {
                         <DataField
                           label="Estado"
                           value={(selectedPatient.status || "active") === "active" ? "Activo" : "Inactivo"}
+                        />
+                        <DataField
+                          label="Código de paciente"
+                          value={inviteMap[selectedPatient.id]?.code || "-"}
+                        />
+                        <DataField
+                          label="Estado del código"
+                          value={
+                            inviteMap[selectedPatient.id]?.used_at
+                              ? "Usado"
+                              : inviteMap[selectedPatient.id]?.code
+                              ? "Pendiente"
+                              : "-"
+                          }
                         />
                         <div
                           style={{
@@ -1758,6 +1883,135 @@ export default function DoctorApp() {
                         rows={3}
                         style={textareaStyle}
                       />
+                    </div>
+                  )}
+                </Card>
+
+                <Card
+                  title="Prescripción"
+                  subtitle={
+                    selectedPatient
+                      ? `Paciente: ${selectedPatient.full_name}`
+                      : "Selecciona un paciente para prescribir"
+                  }
+                >
+                  {!selectedPatient ? (
+                    <div style={{ color: BRAND.muted }}>Selecciona un paciente.</div>
+                  ) : (
+                    <div style={{ display: "grid", gap: 18 }}>
+                      <div
+                        style={{
+                          background: BRAND.surfaceSoft,
+                          border: `1px solid ${BRAND.border}`,
+                          borderRadius: 18,
+                          padding: 16,
+                          display: "grid",
+                          gap: 12,
+                        }}
+                      >
+                        <SectionTitle>Nueva prescripción</SectionTitle>
+
+                        <input
+                          placeholder="Título (ej. Control metabólico, Prescripción médica)"
+                          value={rxTitle}
+                          onChange={(e) => setRxTitle(e.target.value)}
+                          style={inputStyle}
+                        />
+
+                        <textarea
+                          placeholder="Diagnóstico"
+                          value={rxDiagnosis}
+                          onChange={(e) => setRxDiagnosis(e.target.value)}
+                          rows={3}
+                          style={textareaStyle}
+                        />
+
+                        <textarea
+                          placeholder="Prescripción"
+                          value={rxPrescriptionText}
+                          onChange={(e) => setRxPrescriptionText(e.target.value)}
+                          rows={6}
+                          style={textareaStyle}
+                        />
+
+                        <textarea
+                          placeholder="Indicaciones"
+                          value={rxInstructionsText}
+                          onChange={(e) => setRxInstructionsText(e.target.value)}
+                          rows={5}
+                          style={textareaStyle}
+                        />
+
+                        <textarea
+                          placeholder="Notas adicionales"
+                          value={rxNotes}
+                          onChange={(e) => setRxNotes(e.target.value)}
+                          rows={3}
+                          style={textareaStyle}
+                        />
+
+                        <div>
+                          <PrimaryButton onClick={savePrescription} disabled={savingPrescription}>
+                            {savingPrescription ? "Guardando..." : "Guardar prescripción"}
+                          </PrimaryButton>
+                        </div>
+                      </div>
+
+                      <div>
+                        <SectionTitle>Prescripciones guardadas</SectionTitle>
+
+                        <div style={{ display: "grid", gap: 12 }}>
+                          {prescriptions.map((item) => (
+                            <div
+                              key={item.id}
+                              style={{
+                                background: BRAND.surfaceSoft,
+                                border: `1px solid ${BRAND.border}`,
+                                borderRadius: 18,
+                                padding: 16,
+                                display: "grid",
+                                gap: 10,
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display: "flex",
+                                  justifyContent: "space-between",
+                                  gap: 12,
+                                  alignItems: "center",
+                                  flexWrap: "wrap",
+                                }}
+                              >
+                                <div style={{ minWidth: 0 }}>
+                                  <div style={{ fontWeight: 900, color: BRAND.text }}>
+                                    {item.title || "Prescripción"}
+                                  </div>
+                                  <div style={{ marginTop: 4, fontSize: 12, color: BRAND.muted }}>
+                                    {new Date(item.created_at).toLocaleString()}
+                                  </div>
+                                </div>
+
+                                <SmallBadge tone={item.status === "active" ? "success" : "warning"}>
+                                  {item.status || "active"}
+                                </SmallBadge>
+                              </div>
+
+                              <div style={responsiveGrid(220)}>
+                                <DataField label="Diagnóstico" value={item.diagnosis} />
+                                <DataField label="Prescripción" value={item.prescription_text} />
+                                <DataField label="Indicaciones" value={item.instructions_text} />
+                                <DataField label="Notas" value={item.notes} />
+                              </div>
+                            </div>
+                          ))}
+
+                          {prescriptions.length === 0 ? (
+                            <div style={{ color: BRAND.muted, fontSize: 14 }}>
+                              Aún no hay prescripciones para este paciente.
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
                     </div>
                   )}
                 </Card>
