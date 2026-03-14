@@ -847,9 +847,13 @@ const vincular = async () => {
 
   if (error) {
     const message = error.message || "";
+
     if (message.includes("Código no existe")) return setErr("Ese código no existe.");
     if (message.includes("ya fue usado")) return setErr("Ese código ya fue usado.");
     if (message.includes("ya está vinculado")) return setErr("Ese perfil ya está vinculado.");
+    if (message.includes("Perfil no existe")) return setErr("El perfil del paciente no existe.");
+    if (message.includes("No authenticated user")) return setErr("No hay sesión activa.");
+
     return setErr(message);
   }
 
@@ -866,12 +870,14 @@ const vincular = async () => {
   setWeeks(w);
   await syncPlanForDate(updatedProfile.id, todayISO(), w);
 
+  setCode("");
   setMsg("✅ Listo. Tu cuenta ya está vinculada.");
 
   if (isMobile) {
     setMobileSection("today");
   }
 };
+
 
   const onPickWeek = async (weekStart) => {
     setErr("");
@@ -1205,7 +1211,7 @@ const vincular = async () => {
               <input
                 placeholder="KIV-XXXXXX"
                 value={code}
-                onChange={(e) => setCode(e.target.value)}
+                onChange={(e) => setCode(e.target.value.toUpperCase())}
                 style={inputStyle}
               />
 
